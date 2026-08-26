@@ -1,10 +1,39 @@
 import { NextRequest } from "next/server";
 import { db } from "@/db";
 import { tlsTalos, tlsCommerceServices } from "@/db/schema";
-import { and, desc, eq, ilike, lt, ne, or } from "drizzle-orm";
+import { and, desc, eq, gte, ilike, lte, lt, ne, or } from "drizzle-orm";
 import { parseLimit } from "@/lib/parse-limit";
 import { fetchReputations } from "@/lib/reputation-ledger";
 import { withTraceContext } from "@/lib/tracing";
+
+type ServiceCursor = {
+  createdAt: string;
+  id: string;
+};
+
+function encodeCursor(cursor: ServiceCursor): string {
+  return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
+}
+
+function decodeCursor(raw: string | null): ServiceCursor | null {
+  if (raw === null) return null;
+
+  try {
+    const parsed = JSON.parse(Buffer.from(raw, "base64url").toString("utf8")) as Partial<ServiceCursor>;
+    const date = new Date(parsed.createdAt ?? "");
+    if (
+      typeof parsed.createdAt !== "string" ||
+      Number.isNaN(date.getTime()) ||
+      typeof parsed.id !== "string" ||
+      parsed.id.length === 0
+    ) {
+      return null;
+    }
+    return { createdAt: date.toISOString(), id: parsed.id };
+  } catch {
+    return null;
+  }
+}
 
 // GET /api/services — Discover available services across all TALOS agents
 async function handleGet(request: NextRequest) {
@@ -12,7 +41,10 @@ async function handleGet(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const category = searchParams.get("category");
     const selfId = searchParams.get("self");
-    const cursor = searchParams.get("cursor");
+    const cursor = decodeCursor(searchParams.get("cursor"));
+    if (searchParams.has("cursor") && !cursor) {
+      return Response.json({ error: "cursor must be a valid service cursor" }, { status: 400 });
+    }
     const parsedLimit = parseLimit(searchParams.get("limit"), 50, 100);
     if (!parsedLimit.ok) return parsedLimit.response;
     const limit = parsedLimit.limit;
@@ -20,6 +52,16 @@ async function handleGet(request: NextRequest) {
     const minScore = searchParams.has("minScore") ? Number(searchParams.get("minScore")) : undefined;
     const minConfidence = searchParams.has("minConfidence") ? Number(searchParams.get("minConfidence")) : undefined;
     const allowColdStart = searchParams.get("allowColdStart") === "true";
+    const minPrice = searchParams.has("minPrice") ? Number(searchParams.get("minPrice")) : undefined;
+    const maxPrice = searchParams.has("maxPrice") ? Number(searchParams.get("maxPrice")) : undefined;
+
+    if (
+      (minPrice !== undefined && !Number.isFinite(minPrice)) ||
+      (maxPrice !== undefined && !Number.isFinite(maxPrice)) ||
+      (minPrice !== undefined && maxPrice !== undefined && minPrice > maxPrice)
+    ) {
+      return Response.json({ error: "price bounds must be valid numbers with minPrice <= maxPrice" }, { status: 400 });
+    }
 
     let currentCursor = cursor;
     const accumulated: any[] = [];
@@ -39,20 +81,24 @@ async function handleGet(request: NextRequest) {
         conditions.push(ilike(tlsTalos.category, category));
       }
 
+      if (minPrice !== undefined) {
+        conditions.push(gte(tlsCommerceServices.price, String(minPrice)));
+      }
+      if (maxPrice !== undefined) {
+        conditions.push(lte(tlsCommerceServices.price, String(maxPrice)));
+      }
+
       // Cursor condition (createdAt DESC with id tiebreaker)
       if (currentCursor) {
-        const [cursorDate, cursorId] = currentCursor.split("|");
-        if (cursorDate && cursorId) {
-          conditions.push(
-            or(
-              lt(tlsCommerceServices.createdAt, new Date(cursorDate)),
-              and(
-                eq(tlsCommerceServices.createdAt, new Date(cursorDate)),
-                lt(tlsCommerceServices.id, cursorId),
-              ),
-            )!,
-          );
-        }
+        conditions.push(
+          or(
+            lt(tlsCommerceServices.createdAt, new Date(currentCursor.createdAt)),
+            and(
+              eq(tlsCommerceServices.createdAt, new Date(currentCursor.createdAt)),
+              lt(tlsCommerceServices.id, currentCursor.id),
+            ),
+          )!,
+        );
       }
 
       const services = await db
@@ -118,26 +164,20 @@ async function handleGet(request: NextRequest) {
             createdAt: service.createdAt,
           });
           if (accumulated.length === limit) {
-            currentCursor = `${service.createdAt.toISOString()}|${service.id}`;
+            currentCursor = { createdAt: service.createdAt.toISOString(), id: service.id };
             break;
           }
         }
-        currentCursor = `${service.createdAt.toISOString()}|${service.id}`;
+        currentCursor = { createdAt: service.createdAt.toISOString(), id: service.id };
       }
     }
 
-    // Shuffle for diversity — agents see different services each cycle
-    for (let i = accumulated.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [accumulated[i], accumulated[j]] = [accumulated[j], accumulated[i]];
-    }
-
-    const nextCursor = (exhausted && accumulated.length < limit) ? null : currentCursor;
+    const nextCursor = exhausted ? null : currentCursor;
 
     // Remove cursor tracking fields from the output to match original payload structure
     const results = accumulated.map(({ id, createdAt, ...rest }) => rest);
 
-    return Response.json({ data: results, nextCursor });
+    return Response.json({ data: results, nextCursor: nextCursor ? encodeCursor(nextCursor) : null });
   } catch {
     return internalError(request);
   }
