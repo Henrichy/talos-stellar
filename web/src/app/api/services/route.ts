@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { db } from "@/db";
 import { tlsTalos, tlsCommerceServices } from "@/db/schema";
-import { and, desc, eq, gte, ilike, lte, lt, ne, or } from "drizzle-orm";
+import { and, desc, eq, ilike, lt, ne, or } from "drizzle-orm";
 import { parseLimit } from "@/lib/parse-limit";
 import { fetchReputations } from "@/lib/reputation-ledger";
 import { withTraceContext } from "@/lib/tracing";
@@ -52,16 +52,6 @@ async function handleGet(request: NextRequest) {
     const minScore = searchParams.has("minScore") ? Number(searchParams.get("minScore")) : undefined;
     const minConfidence = searchParams.has("minConfidence") ? Number(searchParams.get("minConfidence")) : undefined;
     const allowColdStart = searchParams.get("allowColdStart") === "true";
-    const minPrice = searchParams.has("minPrice") ? Number(searchParams.get("minPrice")) : undefined;
-    const maxPrice = searchParams.has("maxPrice") ? Number(searchParams.get("maxPrice")) : undefined;
-
-    if (
-      (minPrice !== undefined && !Number.isFinite(minPrice)) ||
-      (maxPrice !== undefined && !Number.isFinite(maxPrice)) ||
-      (minPrice !== undefined && maxPrice !== undefined && minPrice > maxPrice)
-    ) {
-      return Response.json({ error: "price bounds must be valid numbers with minPrice <= maxPrice" }, { status: 400 });
-    }
 
     let currentCursor = cursor;
     const accumulated: any[] = [];
@@ -79,13 +69,6 @@ async function handleGet(request: NextRequest) {
       // Filter by TALOS category (case-insensitive match in DB)
       if (category) {
         conditions.push(ilike(tlsTalos.category, category));
-      }
-
-      if (minPrice !== undefined) {
-        conditions.push(gte(tlsCommerceServices.price, String(minPrice)));
-      }
-      if (maxPrice !== undefined) {
-        conditions.push(lte(tlsCommerceServices.price, String(maxPrice)));
       }
 
       // Cursor condition (createdAt DESC with id tiebreaker)
