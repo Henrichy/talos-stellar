@@ -31,7 +31,6 @@ from talos_agent.agent.prompt import build_system_prompt
 from talos_agent.http import call_with_retry
 from talos_agent.routing import (
     FallbackChain,
-    ProviderRegistry,
     RoutingConstraints,
     RoutingPolicy,
     UsageTracker,
@@ -232,8 +231,6 @@ async def _routed_agent_loop(
             f"[dim]Router: {decision.provider_name}/{decision.model} "
             f"(score={decision.score:.2f})[/dim]"
         )
-
-        provider = registry.get(decision.provider_name)
 
         # Define the completion operation for fallback
         async def _complete(
