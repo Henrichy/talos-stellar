@@ -37,7 +37,7 @@ export async function GET(request: NextRequest) {
 
     const patronCount = patronCountQuery;
     let currentCursor = cursor;
-    const accumulated: any[] = [];
+    const accumulated: Array<Record<string, unknown>> = [];
     let exhausted = false;
 
     // Loop until we fulfill the limit or exhaust the DB
