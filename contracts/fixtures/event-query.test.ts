@@ -21,6 +21,7 @@ import {
   UnboundedPageSizeError,
   MalformedEventError,
   UnknownEventError,
+  UnsupportedVersionError,
   type EventFixture,
   type FixtureSet,
 } from "./event-query";
@@ -145,8 +146,8 @@ describe("bounded querying", () => {
       toLedger: 100020,
       pageSize: 10,
     });
-    expect(result.total).toBe(3);
-    expect(result.events.map((e) => e.event).sort()).toEqual(["pat_upd", "reg_upd", "tls_crt"]);
+    expect(result.total).toBe(4);
+    expect(result.events.map((e) => e.event).sort()).toEqual(["pat_upd", "reg_upd", "tls_crt", "tls_crt2"]);
   });
 
   it("treats ledger bounds as inclusive on both ends", () => {
@@ -310,6 +311,12 @@ describe("malformed payloads", () => {
         set,
       ),
     ).toThrow(UnknownEventError);
+  });
+
+  it("rejects an unsupported version", () => {
+    const fixture = set.malformed.find((m) => m.id === "malformed.unsupported_version");
+    expect(fixture).toBeDefined();
+    expect(() => parseEventFixture(fixture!.fixture, set)).toThrow(UnsupportedVersionError);
   });
 });
 

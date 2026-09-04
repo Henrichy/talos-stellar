@@ -111,6 +111,10 @@ jobs:
             fi
           else
             IFS=',' read -ra REQ <<< "$REQUESTED"
+            if [[ ${#REQ[@]} -gt 4 ]]; then
+              echo "::error::Too many components requested (${#REQ[@]}). Maximum allowed is 4."
+              exit 1
+            fi
             for c in "${REQ[@]}"; do
               case "$c" in
                 sdk|agent|contracts|web) COMPONENTS+=("$c") ;;
@@ -166,6 +170,10 @@ jobs:
         env:
           READINESS_SCENARIO: ${{ matrix.readiness-scenario }}
           MOCK_CLOCK_ISO: "2024-01-01T00:00:00.000Z"
+
+      - name: Run web analytics response-limit tests
+        if: matrix.readiness-scenario == 'healthy'
+        run: pnpm --dir web exec vitest run src/app/api/analytics
 
   generate-sdk:
     needs: detect-components
